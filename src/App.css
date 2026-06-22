@@ -121,7 +121,9 @@
 /* ============ Content ============ */
 .content {
   padding: 26px 32px 60px;
-  max-width: 1300px;
+  max-width: 1600px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .content-header {
