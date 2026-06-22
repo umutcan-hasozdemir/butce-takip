@@ -1,0 +1,42 @@
+:root {
+  --bg: #0b1120;
+  --surface: #131a2c;
+  --surface-2: #1e293b;
+  --border: #1e293b;
+  --text: #e2e8f0;
+  --text-muted: #94a3b8;
+
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: dark;
+  color: var(--text);
+  background-color: var(--bg);
+
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(900px 500px at 100% 0%, rgba(99, 102, 241, 0.12), transparent),
+    radial-gradient(700px 400px at 0% 100%, rgba(139, 92, 246, 0.1), transparent),
+    var(--bg);
+}
+
+h1, h2, h3 {
+  color: #f8fafc;
+}
+
+button {
+  font-family: inherit;
+}
