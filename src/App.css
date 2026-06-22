@@ -255,6 +255,33 @@
 .tooltip-label { margin: 0 0 4px; font-weight: 600; color: var(--text-muted); }
 .chart-tooltip p { margin: 2px 0; }
 
+/* Pasta grafiği özel göstergesi — düzgün sarmalanır, üst üste binmez */
+.pie-legend {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 7px 14px;
+}
+
+.pie-legend li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.2;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
 /* ============ Transactions grid ============ */
 .main-grid {
   display: grid;

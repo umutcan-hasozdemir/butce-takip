@@ -28,6 +28,20 @@ function CurrencyTooltip({ active, payload, label }) {
 
 const DEPT_COLORS = ["#6366f1", "#06b6d4", "#22c55e", "#f97316", "#ec4899", "#eab308", "#8b5cf6"];
 
+// Pasta grafiği için SVG dışına yerleşen, düzgün sarmalanan özel gösterge
+function CategoryLegend({ data }) {
+  return (
+    <ul className="pie-legend">
+      {data.map((entry) => (
+        <li key={entry.name}>
+          <span className="legend-dot" style={{ backgroundColor: entry.color }} />
+          {entry.name}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 // Server'dan gelen stats nesnesini grafiklere dönüştürür
 export default function Charts({ stats }) {
   const categoryData = stats.byCategory || [];
@@ -60,12 +74,12 @@ export default function Charts({ stats }) {
                 ))}
               </Pie>
               <Tooltip content={<CurrencyTooltip />} />
-              <Legend />
             </PieChart>
           </ResponsiveContainer>
         ) : (
           <p className="empty-state">Gider ekledikçe dağılım burada görünecek.</p>
         )}
+        {categoryData.length > 0 && <CategoryLegend data={categoryData} />}
       </div>
 
       <div className="chart-card">
