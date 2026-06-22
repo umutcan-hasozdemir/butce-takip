@@ -4,8 +4,14 @@
     {
       "name": "butcem-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": ["run", "dev", "--prefix", "butce-takip"],
       "port": 5173
+    },
+    {
+      "name": "jobtrail-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "jobtrail"],
+      "port": 5174
     }
   ]
 }
