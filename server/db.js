@@ -1,69 +1,91 @@
-import Database from "better-sqlite3";
+import pg from "pg";
 import bcrypt from "bcryptjs";
+import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const db = new Database(join(__dirname, "fintrack.db"));
+dotenv.config({ path: join(__dirname, ".env") });
 
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
+// NUMERIC (OID 1700) değerlerini JS sayısı olarak döndür (varsayılan string gelir)
+pg.types.setTypeParser(1700, (v) => (v === null ? null : parseFloat(v)));
 
-// ---------- Şema (multi-tenant) ----------
-db.exec(`
-  CREATE TABLE IF NOT EXISTS companies (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    name       TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  console.error("⚠️  DATABASE_URL tanımlı değil. server/.env dosyasına ekleyin.");
+}
 
-  CREATE TABLE IF NOT EXISTS users (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    company_id    INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-    name          TEXT NOT NULL,
-    email         TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    role          TEXT NOT NULL CHECK (role IN ('admin','accountant','employee')),
-    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-  );
+// Yerel Postgres SSL istemez; Neon/bulut Postgres ister.
+const isLocal = /localhost|127\.0\.0\.1/.test(connectionString || "");
+export const pool = new pg.Pool({
+  connectionString,
+  ssl: isLocal ? false : { rejectUnauthorized: false },
+});
 
-  CREATE TABLE IF NOT EXISTS categories (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-    name       TEXT NOT NULL,
-    type       TEXT NOT NULL CHECK (type IN ('income','expense')),
-    color      TEXT NOT NULL DEFAULT '#64748b',
-    icon       TEXT NOT NULL DEFAULT '📦',
-    is_default INTEGER NOT NULL DEFAULT 0
-  );
+// Kısa sorgu yardımcıları
+export async function q(text, params) {
+  const res = await pool.query(text, params);
+  return res.rows;
+}
+export async function one(text, params) {
+  const res = await pool.query(text, params);
+  return res.rows[0] || null;
+}
 
-  CREATE TABLE IF NOT EXISTS departments (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-    name       TEXT NOT NULL,
-    UNIQUE (company_id, name)
-  );
+// ---------- Şema oluşturma (idempotent) ----------
+export async function createSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS companies (
+      id         SERIAL PRIMARY KEY,
+      name       TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
 
-  CREATE TABLE IF NOT EXISTS transactions (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    company_id    INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-    type          TEXT NOT NULL CHECK (type IN ('income','expense')),
-    amount        REAL NOT NULL CHECK (amount > 0),
-    category_id   INTEGER REFERENCES categories(id) ON DELETE SET NULL,
-    department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
-    vendor        TEXT DEFAULT '',
-    description   TEXT DEFAULT '',
-    date          TEXT NOT NULL,
-    created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-`);
+    CREATE TABLE IF NOT EXISTS users (
+      id            SERIAL PRIMARY KEY,
+      company_id    INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name          TEXT NOT NULL,
+      email         TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      role          TEXT NOT NULL CHECK (role IN ('admin','accountant','employee')),
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
 
-// ---------- Yeni bir şirket için varsayılan kategori/departmanları oluşturur ----------
-export function seedDefaultsForCompany(companyId) {
-  const insertCat = db.prepare(
-    "INSERT INTO categories (company_id, name, type, color, icon, is_default) VALUES (?, ?, ?, ?, ?, 1)"
-  );
+    CREATE TABLE IF NOT EXISTS categories (
+      id         SERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name       TEXT NOT NULL,
+      type       TEXT NOT NULL CHECK (type IN ('income','expense')),
+      color      TEXT NOT NULL DEFAULT '#64748b',
+      icon       TEXT NOT NULL DEFAULT '📦',
+      is_default BOOLEAN NOT NULL DEFAULT false
+    );
+
+    CREATE TABLE IF NOT EXISTS departments (
+      id         SERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name       TEXT NOT NULL,
+      UNIQUE (company_id, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS transactions (
+      id            SERIAL PRIMARY KEY,
+      company_id    INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      type          TEXT NOT NULL CHECK (type IN ('income','expense')),
+      amount        NUMERIC NOT NULL CHECK (amount > 0),
+      category_id   INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+      department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+      vendor        TEXT DEFAULT '',
+      description   TEXT DEFAULT '',
+      date          TEXT NOT NULL,
+      created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+}
+
+// ---------- Yeni şirket için varsayılan kategori/departmanlar ----------
+export async function seedDefaultsForCompany(companyId) {
   const defaults = [
     ["Personel / Maaş", "expense", "#ef4444", "👥"],
     ["Kira & Aidat", "expense", "#8b5cf6", "🏢"],
@@ -78,50 +100,43 @@ export function seedDefaultsForCompany(companyId) {
     ["Yatırım / Faiz", "income", "#3b82f6", "📈"],
     ["Diğer Gelir", "income", "#a855f7", "✨"],
   ];
-  for (const d of defaults) insertCat.run(companyId, ...d);
-
-  const insertDep = db.prepare(
-    "INSERT INTO departments (company_id, name) VALUES (?, ?)"
-  );
-  for (const name of [
-    "Genel Yönetim",
-    "Satış & Pazarlama",
-    "Yazılım & Ar-Ge",
-    "İnsan Kaynakları",
-    "Operasyon",
-  ]) {
-    insertDep.run(companyId, name);
+  for (const [name, type, color, icon] of defaults) {
+    await pool.query(
+      "INSERT INTO categories (company_id, name, type, color, icon, is_default) VALUES ($1,$2,$3,$4,$5,true)",
+      [companyId, name, type, color, icon]
+    );
+  }
+  for (const name of ["Genel Yönetim", "Satış & Pazarlama", "Yazılım & Ar-Ge", "İnsan Kaynakları", "Operasyon"]) {
+    await pool.query("INSERT INTO departments (company_id, name) VALUES ($1,$2)", [companyId, name]);
   }
 }
 
-// ---------- Demo şirket + kullanıcılar + örnek işlemler (yalnızca ilk kurulumda) ----------
-const seedDemo = db.transaction(() => {
-  const companyCount = db.prepare("SELECT COUNT(*) AS c FROM companies").get().c;
-  if (companyCount > 0) return;
+// ---------- Demo şirket + kullanıcılar + örnek işlemler (yalnızca boşsa) ----------
+export async function seedDemo() {
+  const existing = await one("SELECT COUNT(*)::int AS c FROM companies");
+  if (existing.c > 0) return;
 
-  const companyId = db
-    .prepare("INSERT INTO companies (name) VALUES (?)")
-    .run("Demo Şirket A.Ş.").lastInsertRowid;
-
+  const company = await one("INSERT INTO companies (name) VALUES ($1) RETURNING id", ["Demo Şirket A.Ş."]);
+  const companyId = company.id;
   const hash = (pw) => bcrypt.hashSync(pw, 10);
-  const insertUser = db.prepare(
-    "INSERT INTO users (company_id, name, email, password_hash, role) VALUES (?, ?, ?, ?, ?)"
+  const admin = await one(
+    "INSERT INTO users (company_id, name, email, password_hash, role) VALUES ($1,$2,$3,$4,'admin') RETURNING id",
+    [companyId, "Demo Yönetici", "admin@demo.com", hash("demo1234")]
   );
-  const adminId = insertUser.run(companyId, "Demo Yönetici", "admin@demo.com", hash("demo1234"), "admin").lastInsertRowid;
-  insertUser.run(companyId, "Demo Muhasebe", "muhasebe@demo.com", hash("demo1234"), "accountant");
-  insertUser.run(companyId, "Demo Çalışan", "calisan@demo.com", hash("demo1234"), "employee");
+  await pool.query("INSERT INTO users (company_id, name, email, password_hash, role) VALUES ($1,$2,$3,$4,'accountant')",
+    [companyId, "Demo Muhasebe", "muhasebe@demo.com", hash("demo1234")]);
+  await pool.query("INSERT INTO users (company_id, name, email, password_hash, role) VALUES ($1,$2,$3,$4,'employee')",
+    [companyId, "Demo Çalışan", "calisan@demo.com", hash("demo1234")]);
 
-  seedDefaultsForCompany(companyId);
+  await seedDefaultsForCompany(companyId);
 
-  // Örnek işlemler
-  const catId = (name) =>
-    db.prepare("SELECT id FROM categories WHERE company_id = ? AND name = ?").get(companyId, name)?.id;
-  const depId = (name) =>
-    db.prepare("SELECT id FROM departments WHERE company_id = ? AND name = ?").get(companyId, name)?.id;
+  const catId = async (name) =>
+    (await one("SELECT id FROM categories WHERE company_id=$1 AND name=$2", [companyId, name]))?.id;
+  const depId = async (name) =>
+    (await one("SELECT id FROM departments WHERE company_id=$1 AND name=$2", [companyId, name]))?.id;
 
   const now = new Date();
-  const d = (monthsAgo, day) =>
-    new Date(now.getFullYear(), now.getMonth() - monthsAgo, day).toISOString().slice(0, 10);
+  const d = (m, day) => new Date(now.getFullYear(), now.getMonth() - m, day).toISOString().slice(0, 10);
 
   const samples = [
     ["income", 480000, "Satış Geliri", "Satış & Pazarlama", "Acme A.Ş.", "Q dönemi satış", 0, 2],
@@ -139,15 +154,11 @@ const seedDemo = db.transaction(() => {
     ["expense", 175000, "Personel / Maaş", "Genel Yönetim", "", "Aylık bordro", 2, 1],
     ["expense", 15000, "Ofis & Ekipman", "Yazılım & Ar-Ge", "Teknosa", "Laptop alımı", 2, 6],
   ];
-  const insert = db.prepare(
-    `INSERT INTO transactions (company_id, type, amount, category_id, department_id, vendor, description, date, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-  for (const [type, amount, cat, dep, vendor, desc, mAgo, day] of samples) {
-    insert.run(companyId, type, amount, catId(cat), depId(dep), vendor, desc, d(mAgo, day), adminId);
+  for (const [type, amount, cat, dep, vendor, desc, m, day] of samples) {
+    await pool.query(
+      `INSERT INTO transactions (company_id, type, amount, category_id, department_id, vendor, description, date, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [companyId, type, amount, await catId(cat), await depId(dep), vendor, desc, d(m, day), admin.id]
+    );
   }
-});
-
-seedDemo();
-
-export default db;
+}
