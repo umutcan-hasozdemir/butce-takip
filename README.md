@@ -4,6 +4,7 @@
 sağlayan **çok kiracılı (multi-tenant) full-stack** bir SaaS uygulaması. Her şirketin
 verisi izoledir; kullanıcılar rollerine göre yetkilendirilir, raporlar Excel ve PDF
 olarak dışa aktarılabilir.
+canlıda görmek için https://butce-takip-seven.vercel.app/ adresini ziyaret ediniz.
 
 > **Mimari:** React (Vite) + Express REST API + SQLite + JWT kimlik doğrulama.
 
